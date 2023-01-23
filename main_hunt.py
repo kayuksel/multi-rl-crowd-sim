@@ -16,7 +16,6 @@ k = 10
 # Global variables for positions and velocities
 positions = torch.rand(num_particles, 2).cuda() * 100.0
 velocities = torch.zeros(num_particles, 2).cuda()
-goals = torch.rand(num_particles, 2).cuda() * 100.0
 
 def generate_batch(positions, velocities, k):
     num_particles = positions.shape[0]
