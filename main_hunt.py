@@ -41,23 +41,6 @@ def generate_batch(positions, velocities, k):
     batch_input = torch.cat([velocities[nearest_neighbors].reshape(num_particles, 2 * k), relative_positions.reshape(num_particles, 2 * k), relative_positions_2.reshape(num_particles, 2 * k), relative_goals], dim=1)
     return batch_input
 
-'''
-
-
-def loss_function(positions, velocities, accelerations, first_half = True):
-    # Check for collisions
-    distances = torch.norm(positions[:half, None] - positions[half:], dim=2)
-    collision_ratio = torch.sigmoid(0.05 - distances) # adjust the threshold here
-    collision_indices = (collision_ratio > 0.0).nonzero()
-    if not first_half: return -collision_ratio.mean()*10, positions, velocities
-    # Compute the mean position of the predators
-    predator_mean_position = positions[half:].mean(dim=0)
-    # Compute the mean distance of preys to the mean position of the predators
-    mean_predator_distance = torch.mean(torch.norm(positions[:half]-predator_mean_position, dim=1))
-    return (collision_ratio + mean_predator_distance).mean()*10, positions, velocities
-'''
-
-#best lost function
 def loss_function(positions, velocities, accelerations, first_half = True):
     # Check for collisions
     distances = torch.norm(positions[:half, None] - positions[half:], dim=2)
