@@ -36,7 +36,8 @@ def generate_batch(positions, velocities, k):
     second_half_goals = torch.mean(first_half_positions, dim=0)
     relative_goals = torch.cat([first_half_goals - first_half_positions, second_half_goals - second_half_positions])
     # Concatenate positions, velocities, relative positions, and relative goals
-    batch_input = torch.cat([velocities[nearest_neighbors].reshape(num_particles, 2 * k), relative_positions.reshape(num_particles, 2 * k), relative_positions_2.reshape(num_particles, 2 * k), relative_goals], dim=1)
+    batch_input = torch.cat([velocities[nearest_neighbors].reshape(num_particles, 2 * k), 
+        relative_positions.reshape(num_particles, 2 * k), relative_positions_2.reshape(num_particles, 2 * k), relative_goals], dim=1)
     return batch_input
 
 def loss_function(positions, velocities, accelerations, first_half = True):
