@@ -1,6 +1,5 @@
 import torch, pdb
 import torch.nn as nn
-import torch.optim as optim
 import matplotlib.pyplot as plt
 
 
@@ -52,10 +51,8 @@ def loss_function(positions, velocities, accelerations, first_half = True):
     mean_predator_distance = torch.mean(torch.norm(positions[:half]-predator_mean_position, dim=1))
     return (collision_ratio + mean_predator_distance).mean(), positions, velocities, indices
 
-size = 256
-
 class AccelerationNetwork(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
+    def __init__(self, input_size, hidden_size, output_size, size=256):
         super(AccelerationNetwork, self).__init__()
         def block(in_feat, out_feat):
             return [nn.Linear(in_feat, out_feat), nn.Mish()]
@@ -75,8 +72,8 @@ prey_accel_net = AccelerationNetwork(3 + 6 * k, 10, 2).cuda()
 predator_accel_net = AccelerationNetwork(3 + 6 * k, 10, 2).cuda()
 
 # Define a single optimizer for both models
-opt_prey = optim.Adam(prey_accel_net.parameters())
-opt_pred = optim.Adam(predator_accel_net.parameters())
+opt_prey = torch.optim.Adam(prey_accel_net.parameters())
+opt_pred = torch.optim.Adam(predator_accel_net.parameters())
 
 max_velocities = torch.rand(num_particles).cuda() + 1
 
