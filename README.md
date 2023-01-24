@@ -1,5 +1,6 @@
 # multi-rl-crowd-sim
 Multi-Agent Reinforcement Learning of Crowd Simulation in GPU (PyTorch)
+Also, developing Predator-Prey Behaviours and a Battlefield Simulation!
 
 Check the following videos for behaviour learnt by each simulation type:
 
