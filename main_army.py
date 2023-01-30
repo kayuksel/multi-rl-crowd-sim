@@ -68,10 +68,10 @@ class ArmyNet(nn.Module):
         self.model = nn.Sequential(*block(input_size, size), nn.Dropout(0.5),
              *block(size, size//2), nn.Dropout(0.5), *block(size//2, size//4), nn.Dropout(0.5), *block(size//4, output_size))
         self.model[-1] = nn.Tanh()
-        #self.std = nn.Parameter(torch.zeros(output_size).cuda())
+        self.std = nn.Parameter(torch.zeros(output_size).cuda())
     def forward(self, x):
         mu = self.model(x)
-        return mu #+ (self.std * torch.randn_like(mu))
+        return mu + (self.std * torch.randn_like(mu))
 
 # Define the prey and predator acceleration networks
 army_1_net = ArmyNet(148, 2).cuda()
