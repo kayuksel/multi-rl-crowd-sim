@@ -10,7 +10,7 @@ half = num_soldiers // 2
 num_iterations = 90000
 
 # Define the number of nearest neighbors to consider
-k = 10
+k = 5
 
 # Global variables for positions, velocities, and healths
 positions = torch.rand(num_soldiers, 2).cuda()
@@ -19,7 +19,7 @@ positions[half:] *= 50
 velocities = torch.zeros(num_soldiers, 2).cuda()
 healths = torch.ones(num_soldiers).cuda().requires_grad_()
 
-field_of_view = torch.tensor(2.0).cuda() 
+field_of_view = torch.tensor(2.0).cuda() #radians
 
 def generate_batch(positions, velocities, healths, k):
     first_half_positions = positions[:half]
@@ -74,8 +74,8 @@ class ArmyNet(nn.Module):
         return mu #+ (self.std * torch.randn_like(mu))
 
 # Define the prey and predator acceleration networks
-army_1_net = ArmyNet(148, 2).cuda()
-army_2_net = ArmyNet(148, 2).cuda()
+army_1_net = ArmyNet(78, 2).cuda()
+army_2_net = ArmyNet(78, 2).cuda()
 
 # Define the optimizers
 optimizer_1 = torch.optim.Adam(army_1_net.parameters())
@@ -105,7 +105,6 @@ def loss_function():
     outcome = torch.rand_like(healths)
 
     army_1_healths_new = torch.where(colliding_mask & (army_2_healths > 0), army_1_healths - relative_health_army2, army_1_healths)
-
     
     #army_1_healths_new = torch.where(colliding_mask & (army_2_healths > 0), army_1_healths - relative_health_army1*army_2_healths * (torch.randn_like(army_2_healths)-0.5), army_1_healths)
 
@@ -198,6 +197,7 @@ for i in range(num_iterations):
     else:
         optimizer_2.zero_grad()
         loss, hel = loss_function()
+        loss = loss * -1
         loss.backward(retain_graph=True)
         if i % ui == (ui - 1): optimizer_2.step()
     
@@ -225,7 +225,7 @@ for i in range(num_iterations):
                 velocities[:, 1].cpu(), ind.float().cpu().numpy(), cmap ='seismic')
             plt.savefig('%i.png' % (i+1000))
 
-        if (i % 1000) == 0:
+        if (i % 1000) == 999:
             # Reset the simulation and update the weights
             positions = torch.rand(num_soldiers, 2).cuda()
 
@@ -241,3 +241,4 @@ for i in range(num_iterations):
                 army_1_net.load_state_dict(army_2_net.state_dict())
             else:
                 army_2_net.load_state_dict(army_1_net.state_dict())
+            
