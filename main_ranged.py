@@ -130,7 +130,7 @@ def loss_function(healths):
 
     hel = torch.clamp(torch.cat([army_1_healths_new,army_2_healths_new]), 0, 1)
 
-    return delta_diff*delta_sum, hel
+    return delta_diff, hel
 
 for i in range(num_iterations):
     # Generate batch
