@@ -3,14 +3,14 @@ import torch, pdb
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-num_soldiers = 1000
+num_soldiers = 200
 half = num_soldiers // 2
 
 # Define the number of training iterations
-num_iterations = 9000
+num_iterations = 90000
 
 # Define the number of nearest neighbors to consider
-k = 20
+k = 10
 
 # Global variables for positions, velocities, and healths
 positions = torch.rand(num_soldiers, 2).cuda()
@@ -19,11 +19,26 @@ positions[half:] *= 50
 velocities = torch.zeros(num_soldiers, 2).cuda()
 healths = torch.ones(num_soldiers).cuda().requires_grad_()
 
+field_of_view = torch.tensor(2.0).cuda() 
+
 def generate_batch(positions, velocities, healths, k):
     first_half_positions = positions[:half]
     second_half_positions = positions[half:]
     # calculate the distance matrix
     distances = torch.norm(positions[:, None] - positions, dim=2)
+
+    # Compute dot product between velocity and position difference
+    dot_product = (positions[:, None] - positions) * velocities[None, :]
+    dot_product = torch.sum(dot_product, dim=2)
+
+    # Find angle between velocity and position difference
+    cos_angle = dot_product / (torch.norm(positions[:, None] - positions, dim=2) * torch.norm(velocities, dim=1))
+    #cos_angle = dot_product / (torch.norm(positions[:, None] - positions, dim=2) * torch.norm(velocities[:, None], dim=2))
+    angle = torch.acos(cos_angle)
+
+    # Set distances to infinity for particles outside the field of view
+    distances[(angle > field_of_view) | (healths <= 0)] += distances.max()
+
     #Find the k nearest neighbors for each particle in the first half
     _, nearest_neighbors = torch.topk(-distances[:,:half], k, dim=1)
     nearest_neighbors = nearest_neighbors.T
@@ -59,8 +74,8 @@ class ArmyNet(nn.Module):
         return mu #+ (self.std * torch.randn_like(mu))
 
 # Define the prey and predator acceleration networks
-army_1_net = ArmyNet(288, 2).cuda()
-army_2_net = ArmyNet(288, 2).cuda()
+army_1_net = ArmyNet(148, 2).cuda()
+army_2_net = ArmyNet(148, 2).cuda()
 
 # Define the optimizers
 optimizer_1 = torch.optim.Adam(army_1_net.parameters())
@@ -200,15 +215,15 @@ for i in range(num_iterations):
 
         print('army_1_alive %f army_2_alive %f' % (army_1_alive, army_2_alive))
 
-        #if (i % 10) == 0:
-        diff = positions - velocities
-            # Plot the simulation
-        ind = torch.cat([torch.ones(half) * hel[:half].cpu(), -torch.ones(half) * hel[half:].cpu()])
-        plt.clf()
-        plt.title("alive_1 %.0f%% alive_2 %.0f%% health_1 %.0f%%, health_2 %.0f%%" % (army_1_alive*100, army_2_alive*100, healths[:half].mean()*100, healths[half:].mean()*100))
-        plt.quiver(diff[:, 0].cpu(), diff[:, 1].cpu(), velocities[:, 0].cpu(), 
-            velocities[:, 1].cpu(), ind.float().cpu().numpy(), cmap ='seismic')
-        plt.savefig('%i.png' % (i+1000))
+        if (i % 10) == 0:
+            diff = positions - velocities
+                # Plot the simulation
+            ind = torch.cat([torch.ones(half) * hel[:half].cpu(), -torch.ones(half) * hel[half:].cpu()])
+            plt.clf()
+            plt.title("alive_1 %.0f%% alive_2 %.0f%% health_1 %.0f%%, health_2 %.0f%%" % (army_1_alive*100, army_2_alive*100, healths[:half].mean()*100, healths[half:].mean()*100))
+            plt.quiver(diff[:, 0].cpu(), diff[:, 1].cpu(), velocities[:, 0].cpu(), 
+                velocities[:, 1].cpu(), ind.float().cpu().numpy(), cmap ='seismic')
+            plt.savefig('%i.png' % (i+1000))
 
         if (i % 1000) == 0:
             # Reset the simulation and update the weights
