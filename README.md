@@ -10,3 +10,5 @@ Check the following videos for behaviour learnt by each simulation type:
 **main_army.py** https://www.youtube.com/watch?v=IZ1Ht6k2U5E
 
 **gym_hunt.py** Gym environment for Predator-Prey Behaviours (in-progress)
+
+**Ranged army self-play on a battlefield with obstacles is in-progress**
