@@ -13,5 +13,5 @@ Check the following videos for behaviour learnt by each simulation type:
 
 **Ranged army self-play on a battlefield with obstacles is also in-progress!**
 ![](ranged_combat.png)  
-Note: This is like a Sniper army battle where they can hide behind each other.
+Note: This is like a Sniper army battle where they can hide behind each other.  
 The strength of hitting also reduces as their health decrease by the attacks.
