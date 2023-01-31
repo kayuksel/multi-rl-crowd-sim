@@ -3,7 +3,7 @@ import torch, pdb
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-num_soldiers = 200
+num_soldiers = 100
 half = num_soldiers // 2
 
 # Define the number of training iterations
