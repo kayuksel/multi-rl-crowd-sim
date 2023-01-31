@@ -3,14 +3,14 @@ import torch, pdb
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-num_soldiers = 20
+num_soldiers = 10
 half = num_soldiers // 2
 
 # Define the number of training iterations
 num_iterations = 90000
 
 # Define the number of nearest neighbors to consider
-k = 10
+k = 5
 
 # Global variables for positions, velocities, and healths
 positions = torch.rand(num_soldiers, 2).cuda()
@@ -76,8 +76,8 @@ class ArmyNet(nn.Module):
         return mu + (self.std * torch.randn_like(mu))
 
 # Define the prey and predator acceleration networks
-army_1_net = ArmyNet(192, 4).cuda()
-army_2_net = ArmyNet(192, 4).cuda()
+army_1_net = ArmyNet(102, 4).cuda()
+army_2_net = ArmyNet(102, 4).cuda()
 
 # Define the optimizers
 optimizer_1 = torch.optim.Adam(army_1_net.parameters())
@@ -97,15 +97,21 @@ def loss_function(healths):
     direction_vectors_2 = relative_positions_2 / torch.norm(relative_positions_2, dim=-1, keepdim=True)
 
     dot_product_1 = torch.sum(direction_vectors_1 * directions[half:][:, None], dim=-1)
-    dot_product_1[army_1_healths <= 0] += torch.max(dot_product_1)
-    mask_1 = torch.zeros_like(healths[:half], dtype=torch.bool).cuda()
-    first_seen_value_1, first_seen_index_1 = torch.min(dot_product_1, dim=-1)
+
+    mask_ind_1 = ((healths[half:] <= 0) | (dot_product_1 != 1.0))
+    relative_distance_1 = torch.norm(relative_positions_1, dim=-1)
+    relative_distance_1[mask_ind_1] += relative_distance_1.max()
+    mask_1 = torch.zeros(half, dtype=torch.bool).cuda()
+    _, first_seen_index_1 = torch.min(relative_distance_1, dim=0, keepdim=True)
     mask_1[first_seen_index_1] = True
 
     dot_product_2 = torch.sum(direction_vectors_2 * directions[:half][:, None], dim=-1)
-    dot_product_2[army_2_healths <= 0] += torch.max(dot_product_2)
-    mask_2 = torch.zeros_like(healths[half:], dtype=torch.bool).cuda()
-    first_seen_value_2, first_seen_index_2 = torch.min(dot_product_2, dim=-1)
+
+    mask_ind_2 = ((healths[:half] <= 0) | (dot_product_2 < 0.99))
+    relative_distance_2 = torch.norm(relative_positions_2, dim=-1)
+    relative_distance_2[mask_ind_2] += relative_distance_2.max()
+    mask_2 = torch.zeros(half, dtype=torch.bool).cuda()
+    _, first_seen_index_2 = torch.min(relative_distance_2, dim=0, keepdim=True)
     mask_2[first_seen_index_2] = True
 
     #compute the relative healths of the soldiers
@@ -114,21 +120,21 @@ def loss_function(healths):
 
     # Decrease health of soliders in army 1 that are seen by soliders in army 2
     army_1_healths_new = torch.where(mask_1, army_1_healths - relative_health_army2 * 0.1, army_1_healths)
-    print(mask_1)
 
     # Decrease health of soliders in army 2 that have seen soliders in army 1
     army_2_healths_new = torch.where(mask_2, army_2_healths - relative_health_army1 * 0.1, army_2_healths)
-    print(mask_2)
 
     # Compute change in healths of both armies
+    army_1_healths_new = army_1_healths_new.clamp(0, 1)
+    army_2_healths_new = army_2_healths_new.clamp(0, 1)
+
     delta_army_1 = army_1_healths_new.mean() - initial_army_1
     delta_army_2 = army_2_healths_new.mean() - initial_army_2
 
     # Compute difference in change of healths between the two armies
     delta_diff = delta_army_1.mean() - delta_army_2.mean()
-    delta_sum = delta_army_1.mean() + delta_army_2.mean()
 
-    hel = torch.clamp(torch.cat([army_1_healths_new,army_2_healths_new]), 0, 1)
+    hel = torch.cat([army_1_healths_new,army_2_healths_new])
 
     return delta_diff, hel, first_seen_index_1, first_seen_index_2
 
@@ -232,20 +238,21 @@ for i in range(num_iterations):
             plt.clf()
             plt.title("alive_1 %.0f%% alive_2 %.0f%% health_1 %.0f%%, health_2 %.0f%%" % (army_1_alive*100, army_2_alive*100, healths[:half].mean()*100, healths[half:].mean()*100))
 
-            x_src = positions[:, 0]
+            ind = torch.cat([torch.ones(half) * hel[:half].cpu(), -torch.ones(half) * hel[half:].cpu()])
 
+            x_src = positions[:, 0]
             y_src = positions[:, 1]
 
-            x_dst = torch.cat((positions[half:][first_seen_index_1][:, 0], positions[:half][first_seen_index_2][:, 0]), dim = 0)
+            x_dst = torch.cat((positions[half:][:, 0][first_seen_index_1], positions[:half][:, 0][first_seen_index_2]), dim = 1)
+            y_dst = torch.cat((positions[half:][:, 1][first_seen_index_1], positions[:half][:, 1][first_seen_index_2]), dim = 1)
 
-            y_dst = torch.cat((positions[half:][first_seen_index_1][:, 1], positions[:half][first_seen_index_2][:, 1]), dim=0)
-
-            # Compute the vectors between the source and target points
+                  # Compute the vectors between the source and target points
             u = x_dst - x_src
             v = y_dst - y_src 
 
-            # Create the quiver plot
-            ind = torch.cat([torch.ones(half) * hel[:half].cpu(), -torch.ones(half) * hel[half:].cpu()])
+
+                # Create the quiver plot
+                
             plt.quiver(x_src.cpu(), y_src.cpu(), u.cpu(), v.cpu(), ind.float().cpu().numpy(), angles='xy', scale_units='xy', scale=1, alpha = 0.05, cmap ='seismic')
 
             diff = positions - directions
