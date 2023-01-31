@@ -107,7 +107,6 @@ def loss_function(healths):
     dot_product_2 = torch.sum(direction_vectors_2 * directions[:half][:, None], dim=-1)
     dot_product_2 = (-dot_product_2 + 1) / 2
 
-    mask_ind_2 = ((healths[:half] <= 0) | (dot_product_2 < 0.99))
     relative_distance_2 = torch.norm(relative_positions_2, dim=-1) * torch.sigmoid(-dot_product_2)
     relative_distance_2[healths[:half] <= 0] += relative_distance_2.max()
     mask_2 = torch.zeros(half, dtype=torch.bool).cuda()
@@ -134,10 +133,11 @@ def loss_function(healths):
 
     # Compute difference in change of healths between the two armies
     delta_diff = delta_army_1.mean() - delta_army_2.mean()
+    delta_sum = delta_army_1.mean() + delta_army_2.mean()
 
     hel = torch.cat([army_1_healths_new,army_2_healths_new])
 
-    return delta_diff, hel, first_seen_index_1, first_seen_index_2
+    return delta_diff * delta_sum, hel, first_seen_index_1, first_seen_index_2
 
 for i in range(num_iterations):
     # Generate batch
