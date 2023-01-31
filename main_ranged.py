@@ -7,7 +7,7 @@ num_soldiers = 200
 half = num_soldiers // 2
 
 # Define the number of training iterations
-num_iterations = 90000
+num_iterations = 9000
 
 # Define the number of nearest neighbors to consider
 k = 20
@@ -233,8 +233,7 @@ for i in range(num_iterations):
 
         print('army_1_alive %f army_2_alive %f' % (army_1_alive, army_2_alive))
 
-        #if (i % 1) == 0:
-        if True:
+        if (i % 5) == 0:
             # Plot the simulation
             plt.clf()
             plt.title("alive_1 %.0f%% alive_2 %.0f%% health_1 %.0f%%, health_2 %.0f%%" % (army_1_alive*100, army_2_alive*100, healths[:half].mean()*100, healths[half:].mean()*100))
@@ -267,9 +266,10 @@ for i in range(num_iterations):
 
             
             
-            plt.savefig('%i.png' % (i+10000))
+            plt.savefig('%i.png' % (i+1000))
 
         if (i % 1000) == 999:
+        #if (loss == 0.0):
             # Reset the simulation and update the weights
             positions = torch.rand(num_soldiers, 2).cuda()
 
