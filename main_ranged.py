@@ -3,14 +3,14 @@ import torch, pdb
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-num_soldiers = 10
+num_soldiers = 200
 half = num_soldiers // 2
 
 # Define the number of training iterations
 num_iterations = 90000
 
 # Define the number of nearest neighbors to consider
-k = 5
+k = 20
 
 # Global variables for positions, velocities, and healths
 positions = torch.rand(num_soldiers, 2).cuda()
@@ -76,8 +76,8 @@ class ArmyNet(nn.Module):
         return mu + (self.std * torch.randn_like(mu))
 
 # Define the prey and predator acceleration networks
-army_1_net = ArmyNet(102, 4).cuda()
-army_2_net = ArmyNet(102, 4).cuda()
+army_1_net = ArmyNet(372, 4).cuda()
+army_2_net = ArmyNet(372, 4).cuda()
 
 # Define the optimizers
 optimizer_1 = torch.optim.Adam(army_1_net.parameters())
@@ -253,6 +253,8 @@ for i in range(num_iterations):
 
 
             # Create the quiver plot
+
+            plt.scatter(positions[:, 0].cpu(), positions[:, 1].cpu(), c = ind.float().cpu().numpy(), cmap ='seismic', s= 50, norm = None)
                 
             plt.quiver(x_src.cpu(), y_src.cpu(), u.cpu(), v.cpu(), ind.float().cpu().numpy(), angles='xy', scale_units='xy', scale=1, alpha = 0.05, cmap ='seismic')
 
@@ -263,7 +265,7 @@ for i in range(num_iterations):
                 directions[:, 1].cpu(), ind.float().cpu().numpy(), cmap ='seismic')
             '''
 
-            plt.scatter(positions[:, 0].cpu(), positions[:, 1].cpu(), c = ind.float().cpu().numpy(), cmap ='seismic', s= 50)
+            
             
             plt.savefig('%i.png' % (i+10000))
 
