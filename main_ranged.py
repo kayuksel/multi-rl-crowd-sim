@@ -98,21 +98,23 @@ def loss_function(healths):
 
     dot_product_1 = torch.sum(direction_vectors_1 * directions[half:][:, None], dim=-1)
 
-    mask_ind_1 = ((healths[half:] <= 0) | (dot_product_1 != 1.0))
+    #mask_ind_1 = ((healths[half:] <= 0) | (dot_product_1 != 1.0))
     relative_distance_1 = torch.norm(relative_positions_1, dim=-1)
-    relative_distance_1[mask_ind_1] += relative_distance_1.max()
+    relative_distance_1[healths[half:] <= 0] += relative_distance_1.max()
     mask_1 = torch.zeros(half, dtype=torch.bool).cuda()
     _, first_seen_index_1 = torch.min(relative_distance_1, dim=0, keepdim=True)
-    mask_1[first_seen_index_1] = True
+    mask_1[first_seen_index_1 & (dot_product_1 == 1.0)] = True
+
 
     dot_product_2 = torch.sum(direction_vectors_2 * directions[:half][:, None], dim=-1)
 
     mask_ind_2 = ((healths[:half] <= 0) | (dot_product_2 < 0.99))
     relative_distance_2 = torch.norm(relative_positions_2, dim=-1)
-    relative_distance_2[mask_ind_2] += relative_distance_2.max()
+    relative_distance_2[healths[:half] <= 0] += relative_distance_2.max()
     mask_2 = torch.zeros(half, dtype=torch.bool).cuda()
     _, first_seen_index_2 = torch.min(relative_distance_2, dim=0, keepdim=True)
-    mask_2[first_seen_index_2] = True
+    mask_2[first_seen_index_2 & (dot_product_2 == 1.0)] = True
+
 
     #compute the relative healths of the soldiers
     relative_health_army1 = army_1_healths / (army_1_healths + army_2_healths + 1e-6)
@@ -251,14 +253,19 @@ for i in range(num_iterations):
             v = y_dst - y_src 
 
 
-                # Create the quiver plot
+            # Create the quiver plot
                 
             plt.quiver(x_src.cpu(), y_src.cpu(), u.cpu(), v.cpu(), ind.float().cpu().numpy(), angles='xy', scale_units='xy', scale=1, alpha = 0.05, cmap ='seismic')
 
-            diff = positions - directions
 
+            '''
+            diff = positions - directions
             plt.quiver(diff[:, 0].cpu(), diff[:, 1].cpu(), directions[:, 0].cpu(), 
                 directions[:, 1].cpu(), ind.float().cpu().numpy(), cmap ='seismic')
+            '''
+
+            plt.scatter(positions[:, 0].cpu(), positions[:, 1].cpu(), c = ind.float().cpu().numpy(), cmap ='seismic', s= 50)
+            
             plt.savefig('%i.png' % (i+10000))
 
         if (i % 1000) == 999:
