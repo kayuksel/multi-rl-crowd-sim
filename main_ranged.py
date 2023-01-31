@@ -10,12 +10,12 @@ half = num_soldiers // 2
 num_iterations = 90000
 
 # Define the number of nearest neighbors to consider
-k = 5
+k = 10
 
 # Global variables for positions, velocities, and healths
 positions = torch.rand(num_soldiers, 2).cuda()
-#positions[:half] *= -50
-#positions[half:] *= 50
+positions[:half] *= -50
+positions[half:] *= 50
 velocities = torch.zeros(num_soldiers, 2).cuda()
 directions = torch.zeros(num_soldiers, 2).cuda()
 healths = torch.ones(num_soldiers).cuda().requires_grad_()
@@ -76,8 +76,8 @@ class ArmyNet(nn.Module):
         return mu + (self.std * torch.randn_like(mu))
 
 # Define the prey and predator acceleration networks
-army_1_net = ArmyNet(98, 4).cuda()
-army_2_net = ArmyNet(98, 4).cuda()
+army_1_net = ArmyNet(192, 4).cuda()
+army_2_net = ArmyNet(192, 4).cuda()
 
 # Define the optimizers
 optimizer_1 = torch.optim.Adam(army_1_net.parameters())
@@ -130,7 +130,7 @@ def loss_function(healths):
 
     hel = torch.clamp(torch.cat([army_1_healths_new,army_2_healths_new]), 0, 1)
 
-    return delta_diff, hel
+    return delta_diff, hel, first_seen_index_1, first_seen_index_2
 
 for i in range(num_iterations):
     # Generate batch
@@ -152,16 +152,16 @@ for i in range(num_iterations):
 
     # Concatenate the mean health and ratio of alive soldiers for both armies for the first half
     first_half_stats = torch.cat([mean_health_army1.view(1, 1),
-        #mean_health_army1.view(1,1), mean_health_army2.view(1,1), 
+        mean_health_army1.view(1,1), mean_health_army2.view(1,1), 
         std_health_army1.view(1,1), std_health_army2.view(1,1), 
-        #ratio_alive_army1.view(1,1), ratio_alive_army2.view(1,1),
+        ratio_alive_army1.view(1,1), ratio_alive_army2.view(1,1),
         std_position_army1.view(1, 2), std_position_army2.view(1, 2)], dim=1)
 
     # Concatenate the mean health and ratio of alive soldiers for both armies for the second half in reverse order
     second_half_stats = torch.cat([mean_health_army2.view(1, 1),
-        #mean_health_army2.view(1,1), mean_health_army1.view(1,1),
+        mean_health_army2.view(1,1), mean_health_army1.view(1,1),
         std_health_army2.view(1,1), std_health_army1.view(1,1), 
-        #ratio_alive_army2.view(1,1), ratio_alive_army1.view(1,1),
+        ratio_alive_army2.view(1,1), ratio_alive_army1.view(1,1),
         std_position_army2.view(1, 2), std_position_army1.view(1, 2)], dim=1)
 
     # repeat the army statistics for the first half
@@ -182,11 +182,11 @@ for i in range(num_iterations):
     # Concatenate accelerations
     accelerations = torch.cat([army_1_accelerations, army_2_accelerations])
 
-    directions = accelerations[:, 2:]
+    directions += accelerations[:, 2:] / torch.norm(accelerations[:,2:], dim=1, keepdim=True)
     directions = directions / torch.norm(directions, dim=1, keepdim=True)
 
     # Update velocities
-    velocities += accelerations[:,:2]
+    velocities += accelerations[:,:2] / torch.norm(accelerations[:,:2], dim=1, keepdim=True)
     # Limit the velocities to the maximum velocities
     velocities = healths[:, None] * velocities / torch.norm(velocities, dim=1, keepdim=True)
     # Update positions
@@ -201,12 +201,12 @@ for i in range(num_iterations):
 
     if current_army:
         optimizer_1.zero_grad()
-        loss, hel = loss_function(healths)
+        loss, hel, first_seen_index_1, first_seen_index_2 = loss_function(healths)
         loss.backward(retain_graph=True)
         if i % ui == (ui - 1): optimizer_1.step()
     else:
         optimizer_2.zero_grad()
-        loss, hel = loss_function(healths)
+        loss, hel, first_seen_index_1, first_seen_index_2 = loss_function(healths)
         loss = loss * -1
         loss.backward(retain_graph=True)
         if i % ui == (ui - 1): optimizer_2.step()
@@ -228,11 +228,24 @@ for i in range(num_iterations):
 
         #if (i % 1) == 0:
         if True:
-            diff = positions - directions
-                # Plot the simulation
-            ind = torch.cat([torch.ones(half) * hel[:half].cpu(), -torch.ones(half) * hel[half:].cpu()])
+            # Plot the simulation
             plt.clf()
             plt.title("alive_1 %.0f%% alive_2 %.0f%% health_1 %.0f%%, health_2 %.0f%%" % (army_1_alive*100, army_2_alive*100, healths[:half].mean()*100, healths[half:].mean()*100))
+            x_src = torch.cat((positions[first_seen_index_1][:, 0], positions[first_seen_index_2][:, 0]), dim=0)
+            y_src = torch.cat((positions[first_seen_index_1][:, 1], positions[first_seen_index_2][:, 1]), dim=0)
+            x_dst = torch.cat((positions[half:][first_seen_index_2][:, 0], positions[:half][first_seen_index_1][:, 0]), dim = 0)
+            y_dst = torch.cat((positions[half:][first_seen_index_2][:, 1], positions[:half][first_seen_index_1][:, 1]), dim=0)
+
+            # Compute the vectors between the source and target points
+            u = x_dst - x_src
+            v = y_dst - y_src
+
+            # Create the quiver plot
+            plt.quiver(x_src.cpu(), y_src.cpu(), u.cpu(), v.cpu(), color='r', angles='xy', scale_units='xy', scale=1, alpha = 0.05)
+
+            diff = positions - directions
+
+            ind = torch.cat([torch.ones(half) * hel[:half].cpu(), -torch.ones(half) * hel[half:].cpu()])
             plt.quiver(diff[:, 0].cpu(), diff[:, 1].cpu(), directions[:, 0].cpu(), 
                 directions[:, 1].cpu(), ind.float().cpu().numpy(), cmap ='seismic')
             plt.savefig('%i.png' % (i+10000))
@@ -241,10 +254,10 @@ for i in range(num_iterations):
             # Reset the simulation and update the weights
             positions = torch.rand(num_soldiers, 2).cuda()
 
-            #positions[:half] *= -50
-            #positions[half:] *= 50
+            positions[:half] *= -50
+            positions[half:] *= 50
 
-            if random.randint(0, 1): positions *= -1
+            #if random.randint(0, 1): positions *= -1
 
             velocities = torch.zeros(num_soldiers, 2).cuda()
             directions = torch.zeros(num_soldiers, 2).cuda()
