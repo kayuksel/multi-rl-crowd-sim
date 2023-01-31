@@ -97,23 +97,22 @@ def loss_function(healths):
     direction_vectors_2 = relative_positions_2 / torch.norm(relative_positions_2, dim=-1, keepdim=True)
 
     dot_product_1 = torch.sum(direction_vectors_1 * directions[half:][:, None], dim=-1)
-
     #mask_ind_1 = ((healths[half:] <= 0) | (dot_product_1 != 1.0))
-    relative_distance_1 = torch.norm(relative_positions_1, dim=-1)
+    relative_distance_1 = torch.norm(relative_positions_1, dim=-1) * torch.sigmoid(-dot_product_1)
     relative_distance_1[healths[half:] <= 0] += relative_distance_1.max()
     mask_1 = torch.zeros(half, dtype=torch.bool).cuda()
     _, first_seen_index_1 = torch.min(relative_distance_1, dim=0, keepdim=True)
-    mask_1[first_seen_index_1 & (dot_product_1 == 1.0)] = True
-
+    mask_1[first_seen_index_1] = True
 
     dot_product_2 = torch.sum(direction_vectors_2 * directions[:half][:, None], dim=-1)
+    dot_product_2 = (-dot_product_2 + 1) / 2
 
     mask_ind_2 = ((healths[:half] <= 0) | (dot_product_2 < 0.99))
-    relative_distance_2 = torch.norm(relative_positions_2, dim=-1)
+    relative_distance_2 = torch.norm(relative_positions_2, dim=-1) * torch.sigmoid(-dot_product_2)
     relative_distance_2[healths[:half] <= 0] += relative_distance_2.max()
     mask_2 = torch.zeros(half, dtype=torch.bool).cuda()
     _, first_seen_index_2 = torch.min(relative_distance_2, dim=0, keepdim=True)
-    mask_2[first_seen_index_2 & (dot_product_2 == 1.0)] = True
+    mask_2[first_seen_index_2] = True
 
 
     #compute the relative healths of the soldiers
