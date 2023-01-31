@@ -97,15 +97,15 @@ def loss_function(healths):
     direction_vectors_2 = relative_positions_2 / torch.norm(relative_positions_2, dim=-1, keepdim=True)
 
     dot_product_1 = torch.sum(direction_vectors_1 * directions[half:][:, None], dim=-1)
-    dot_product_1[army_1_healths <= 0] = torch.max(dot_product_1)
+    dot_product_1[army_1_healths <= 0] += torch.max(dot_product_1)
     mask_1 = torch.zeros_like(healths[:half], dtype=torch.bool).cuda()
-    _, first_seen_index_1 = torch.min(dot_product_1, dim=-1)
+    first_seen_value_1, first_seen_index_1 = torch.min(dot_product_1, dim=-1)
     mask_1[first_seen_index_1] = True
 
     dot_product_2 = torch.sum(direction_vectors_2 * directions[:half][:, None], dim=-1)
-    dot_product_2[army_2_healths <= 0] = torch.max(dot_product_2)
+    dot_product_2[army_2_healths <= 0] += torch.max(dot_product_2)
     mask_2 = torch.zeros_like(healths[half:], dtype=torch.bool).cuda()
-    _, first_seen_index_2 = torch.min(dot_product_2, dim=-1)
+    first_seen_value_2, first_seen_index_2 = torch.min(dot_product_2, dim=-1)
     mask_2[first_seen_index_2] = True
 
     #compute the relative healths of the soldiers
@@ -231,21 +231,25 @@ for i in range(num_iterations):
             # Plot the simulation
             plt.clf()
             plt.title("alive_1 %.0f%% alive_2 %.0f%% health_1 %.0f%%, health_2 %.0f%%" % (army_1_alive*100, army_2_alive*100, healths[:half].mean()*100, healths[half:].mean()*100))
-            x_src = torch.cat((positions[first_seen_index_1][:, 0], positions[first_seen_index_2][:, 0]), dim=0)
-            y_src = torch.cat((positions[first_seen_index_1][:, 1], positions[first_seen_index_2][:, 1]), dim=0)
-            x_dst = torch.cat((positions[half:][first_seen_index_2][:, 0], positions[:half][first_seen_index_1][:, 0]), dim = 0)
-            y_dst = torch.cat((positions[half:][first_seen_index_2][:, 1], positions[:half][first_seen_index_1][:, 1]), dim=0)
+
+            x_src = positions[:, 0]
+
+            y_src = positions[:, 1]
+
+            x_dst = torch.cat((positions[half:][first_seen_index_1][:, 0], positions[:half][first_seen_index_2][:, 0]), dim = 0)
+
+            y_dst = torch.cat((positions[half:][first_seen_index_1][:, 1], positions[:half][first_seen_index_2][:, 1]), dim=0)
 
             # Compute the vectors between the source and target points
             u = x_dst - x_src
-            v = y_dst - y_src
+            v = y_dst - y_src 
 
             # Create the quiver plot
-            plt.quiver(x_src.cpu(), y_src.cpu(), u.cpu(), v.cpu(), color='r', angles='xy', scale_units='xy', scale=1, alpha = 0.05)
+            ind = torch.cat([torch.ones(half) * hel[:half].cpu(), -torch.ones(half) * hel[half:].cpu()])
+            plt.quiver(x_src.cpu(), y_src.cpu(), u.cpu(), v.cpu(), ind.float().cpu().numpy(), angles='xy', scale_units='xy', scale=1, alpha = 0.05, cmap ='seismic')
 
             diff = positions - directions
 
-            ind = torch.cat([torch.ones(half) * hel[:half].cpu(), -torch.ones(half) * hel[half:].cpu()])
             plt.quiver(diff[:, 0].cpu(), diff[:, 1].cpu(), directions[:, 0].cpu(), 
                 directions[:, 1].cpu(), ind.float().cpu().numpy(), cmap ='seismic')
             plt.savefig('%i.png' % (i+10000))
