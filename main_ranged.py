@@ -2,20 +2,30 @@ import random
 import torch, pdb
 import torch.nn as nn
 import matplotlib.pyplot as plt
+import numpy as np
 
 num_soldiers = 100
 half = num_soldiers // 2
+radius = 50.0
 
 # Define the number of training iterations
-num_iterations = 9000
+num_iterations = 90000
 
 # Define the number of nearest neighbors to consider
 k = 20
 
 # Global variables for positions, velocities, and healths
-positions = torch.rand(num_soldiers, 2).cuda()
-positions[:half] *= -50
-positions[half:] *= 50
+angles = torch.linspace(0, 2 * np.pi * (num_soldiers - 1) / num_soldiers, num_soldiers).cuda()
+
+# Generate positions for the first half of the army (Army 1)
+positions = torch.zeros(num_soldiers, 2).cuda()
+positions[:half, 0] = radius * torch.cos(angles[:half])  # x-coordinates
+positions[:half, 1] = radius * torch.sin(angles[:half])  # y-coordinates
+
+# Generate positions for the second half of the army (Army 2)
+positions[half:, 0] = radius * torch.cos(angles[half:])  # x-coordinates
+positions[half:, 1] = radius * torch.sin(angles[half:])  # y-coordinates
+
 velocities = torch.zeros(num_soldiers, 2).cuda()
 directions = torch.zeros(num_soldiers, 2).cuda()
 healths = torch.ones(num_soldiers).cuda().requires_grad_()
@@ -25,7 +35,8 @@ field_of_view = torch.tensor(2.0).cuda() #radians
 def generate_batch(positions, velocities, healths, k):
     first_half_positions = positions[:half]
     second_half_positions = positions[half:]
-    # calculate the distance matrix
+
+    # Calculate the distance matrix
     distances = torch.norm(positions[:, None] - positions, dim=2)
 
     # Compute dot product between velocity and position difference
@@ -34,32 +45,42 @@ def generate_batch(positions, velocities, healths, k):
 
     # Find angle between velocity and position difference
     cos_angle = dot_product / (torch.norm(positions[:, None] - positions, dim=2) * torch.norm(velocities, dim=1))
-    #cos_angle = dot_product / (torch.norm(positions[:, None] - positions, dim=2) * torch.norm(velocities[:, None], dim=2))
     angle = torch.acos(cos_angle)
 
-    # Set distances to infinity for particles outside the field of view
-    distances[(angle > field_of_view) | (healths <= 0)] += distances.max()
+    # Set distances to infinity for soldiers outside the field of view or dead soldiers
+    distances[(angle > field_of_view) | (healths[:, None] <= 0) | (healths <= 0)] = float('inf')
 
-    #Find the k nearest neighbors for each particle in the first half
-    _, nearest_neighbors = torch.topk(-distances[:,:half], k, dim=1)
+    # Find the k nearest neighbors for each particle in the first half
+    _, nearest_neighbors = torch.topk(-distances[:, :half], k, dim=1)
     nearest_neighbors = nearest_neighbors.T
+
     # Find the k nearest neighbors for each particle in the second half
     _, nearest_neighbors_2 = torch.topk(-distances[:, half:], k, dim=1)
     nearest_neighbors_2 = nearest_neighbors_2.T + half
+
     # Compute the relative positions of the nearest neighbors
     relative_positions = positions[nearest_neighbors] - positions[None, :].repeat(k, 1, 1)
     relative_positions_2 = positions[nearest_neighbors_2] - positions[None, :].repeat(k, 1, 1)
 
-    mean_first_half_pos = torch.mean(first_half_positions, dim=0) - positions[None, :].repeat(k, 1, 1)
-    mean_second_half_pos = torch.mean(second_half_positions, dim=0) - positions[None, :].repeat(k, 1, 1)
+    # Compute mean positions for team dynamics, excluding dead soldiers
+    mean_first_half_pos = torch.mean(first_half_positions[healths[:half] > 0], dim=0) - positions[None, :].repeat(k, 1, 1)
+    mean_second_half_pos = torch.mean(second_half_positions[healths[half:] > 0], dim=0) - positions[None, :].repeat(k, 1, 1)
     mean_first_half_pos[half:], mean_second_half_pos[half:] = mean_second_half_pos[half:], mean_first_half_pos[half:]
 
     # Concatenate positions, velocities, relative positions, and relative goals
-    batch_input = torch.cat([velocities[nearest_neighbors].reshape(num_soldiers, 2 * k), velocities[nearest_neighbors_2].reshape(num_soldiers, 2 * k), 
-        healths[nearest_neighbors].reshape(num_soldiers, k), healths[nearest_neighbors_2].reshape(num_soldiers, k), 
-        relative_positions.reshape(num_soldiers, 2 * k), relative_positions_2.reshape(num_soldiers, 2 * k), 
-        mean_first_half_pos.reshape(num_soldiers, 2 * k), mean_second_half_pos.reshape(num_soldiers, 2 * k), 
-        directions[nearest_neighbors].reshape(num_soldiers, 2 * k), directions[nearest_neighbors_2].reshape(num_soldiers, 2 * k)], dim=1)
+    batch_input = torch.cat([
+        velocities[nearest_neighbors].reshape(num_soldiers, 2 * k),
+        velocities[nearest_neighbors_2].reshape(num_soldiers, 2 * k),
+        healths[nearest_neighbors].reshape(num_soldiers, k),
+        healths[nearest_neighbors_2].reshape(num_soldiers, k),
+        relative_positions.reshape(num_soldiers, 2 * k),
+        relative_positions_2.reshape(num_soldiers, 2 * k),
+        mean_first_half_pos.reshape(num_soldiers, 2 * k),
+        mean_second_half_pos.reshape(num_soldiers, 2 * k),
+        directions[nearest_neighbors].reshape(num_soldiers, 2 * k),
+        directions[nearest_neighbors_2].reshape(num_soldiers, 2 * k)
+    ], dim=1)
+
     return batch_input
 
 class ArmyNet(nn.Module):
@@ -84,60 +105,87 @@ optimizer_1 = torch.optim.Adam(army_1_net.parameters())
 optimizer_2 = torch.optim.Adam(army_2_net.parameters())
 
 def loss_function(healths):
+    # Split healths into two armies
     army_1_healths = healths[:half]
-    army_2_healths = healths[half:] 
+    army_2_healths = healths[half:]
 
+    # Save the initial mean health for both armies
     initial_army_1 = army_1_healths.mean()
     initial_army_2 = army_2_healths.mean()
 
+    # Compute relative positions
     relative_positions_1 = positions[:half][:, None] - positions[half:]
     relative_positions_2 = positions[half:][:, None] - positions[:half]
 
-    direction_vectors_1 = relative_positions_1 / torch.norm(relative_positions_1, dim=-1, keepdim=True)
-    direction_vectors_2 = relative_positions_2 / torch.norm(relative_positions_2, dim=-1, keepdim=True)
+    # Compute normalized direction vectors
+    direction_vectors_1 = relative_positions_1 / (torch.norm(relative_positions_1, dim=-1, keepdim=True) + 1e-6)
+    direction_vectors_2 = relative_positions_2 / (torch.norm(relative_positions_2, dim=-1, keepdim=True) + 1e-6)
 
+    # Compute dot products for visibility
     dot_product_1 = torch.sum(direction_vectors_1 * directions[half:][:, None], dim=-1)
-    #mask_ind_1 = ((healths[half:] <= 0) | (dot_product_1 != 1.0))
-    relative_distance_1 = torch.norm(relative_positions_1, dim=-1) * torch.sigmoid(-dot_product_1)
-    relative_distance_1[healths[half:] <= 0] += relative_distance_1.max()
-    mask_1 = torch.zeros(half, dtype=torch.bool).cuda()
-    _, first_seen_index_1 = torch.min(relative_distance_1, dim=0, keepdim=True)
-    mask_1[first_seen_index_1] = True
-
     dot_product_2 = torch.sum(direction_vectors_2 * directions[:half][:, None], dim=-1)
-    dot_product_2 = (-dot_product_2 + 1) / 2
 
+    # Adjust distances based on dot product and visibility
+    relative_distance_1 = torch.norm(relative_positions_1, dim=-1) * torch.sigmoid(-dot_product_1)
     relative_distance_2 = torch.norm(relative_positions_2, dim=-1) * torch.sigmoid(-dot_product_2)
-    relative_distance_2[healths[:half] <= 0] += relative_distance_2.max()
-    mask_2 = torch.zeros(half, dtype=torch.bool).cuda()
-    _, first_seen_index_2 = torch.min(relative_distance_2, dim=0, keepdim=True)
-    mask_2[first_seen_index_2] = True
 
+    # Exclude dead soldiers from being targeted
+    relative_distance_1[:, healths[half:] <= 0] = float('inf')  # Army 2 soldiers cannot be targeted
+    relative_distance_2[:, healths[:half] <= 0] = float('inf')  # Army 1 soldiers cannot be targeted
 
-    #compute the relative healths of the soldiers
-    relative_health_army1 = army_1_healths / (army_1_healths + army_2_healths + 1e-6)
-    relative_health_army2 = army_2_healths / (army_1_healths + army_2_healths + 1e-6)
+    # Find the closest visible opponent for each soldier
+    _, first_seen_index_1 = torch.min(relative_distance_1, dim=1)  # Soldiers in Army 1 targeting Army 2
+    _, first_seen_index_2 = torch.min(relative_distance_2, dim=1)  # Soldiers in Army 2 targeting Army 1
 
-    # Decrease health of soliders in army 1 that are seen by soliders in army 2
-    army_1_healths_new = torch.where(mask_1, army_1_healths - relative_health_army2 * 0.1, army_1_healths)
+    # Revalidate targets: Exclude invalid targets for both armies
+    valid_targets_mask_1 = (healths[half:][first_seen_index_1] > 0) & (first_seen_index_1 != -1)
+    valid_targets_mask_2 = (healths[:half][first_seen_index_2] > 0) & (first_seen_index_2 != -1)
 
-    # Decrease health of soliders in army 2 that have seen soliders in army 1
-    army_2_healths_new = torch.where(mask_2, army_2_healths - relative_health_army1 * 0.1, army_2_healths)
+    # Filter out invalid indices
+    first_seen_index_1 = torch.where(valid_targets_mask_1, first_seen_index_1, -1)
+    first_seen_index_2 = torch.where(valid_targets_mask_2, first_seen_index_2, -1)
 
-    # Compute change in healths of both armies
+    # Compute damage contributions for each valid target
+    damage_to_army_2 = torch.zeros(half).cuda()
+    damage_to_army_1 = torch.zeros(half).cuda()
+
+    # Use scatter_add_ to accumulate damage from attackers
+    damage_to_army_2.scatter_add_(
+        0, 
+        first_seen_index_1[first_seen_index_1 != -1], 
+        healths[:half][first_seen_index_1 != -1] * 0.01
+    )
+    damage_to_army_1.scatter_add_(
+        0, 
+        first_seen_index_2[first_seen_index_2 != -1], 
+        healths[half:][first_seen_index_2 != -1] * 0.01
+    )
+
+    # Apply health reduction
+    army_1_healths_new = torch.where(healths[:half] > 0, army_1_healths - damage_to_army_1, army_1_healths)
+    army_2_healths_new = torch.where(healths[half:] > 0, army_2_healths - damage_to_army_2, army_2_healths)
+
+    # Clamp health values between 0 and 1
     army_1_healths_new = army_1_healths_new.clamp(0, 1)
     army_2_healths_new = army_2_healths_new.clamp(0, 1)
 
+    # Debugging: Check health updates
+    print(f"Army 1 Healths: Initial Mean = {initial_army_1:.3f}, Updated Mean = {army_1_healths_new.mean():.3f}")
+    print(f"Army 2 Healths: Initial Mean = {initial_army_2:.3f}, Updated Mean = {army_2_healths_new.mean():.3f}")
+    print(f"Damage to Army 1: {damage_to_army_1.sum().item()}, Damage to Army 2: {damage_to_army_2.sum().item()}")
+
+    # Compute the changes in health
     delta_army_1 = army_1_healths_new.mean() - initial_army_1
     delta_army_2 = army_2_healths_new.mean() - initial_army_2
 
-    # Compute difference in change of healths between the two armies
-    delta_diff = delta_army_1.mean() - delta_army_2.mean()
-    delta_sum = delta_army_1.mean() + delta_army_2.mean()
+    # Compute the difference and sum of health changes
+    delta_diff = delta_army_1 - delta_army_2
+    delta_sum = delta_army_1 + delta_army_2
 
-    hel = torch.cat([army_1_healths_new,army_2_healths_new])
+    # Concatenate updated healths
+    updated_healths = torch.cat([army_1_healths_new, army_2_healths_new])
 
-    return delta_diff * delta_sum, hel, first_seen_index_1, first_seen_index_2
+    return delta_diff * delta_sum, updated_healths, first_seen_index_1, first_seen_index_2
 
 for i in range(num_iterations):
     # Generate batch
@@ -243,8 +291,9 @@ for i in range(num_iterations):
             x_src = positions[:, 0]
             y_src = positions[:, 1]
 
-            x_dst = torch.cat((positions[half:][:, 0][first_seen_index_1], positions[:half][:, 0][first_seen_index_2]), dim = 1)
-            y_dst = torch.cat((positions[half:][:, 1][first_seen_index_1], positions[:half][:, 1][first_seen_index_2]), dim = 1)
+            x_dst = torch.cat((positions[half:][:, 0][first_seen_index_1], positions[:half][:, 0][first_seen_index_2]), dim=0)
+            y_dst = torch.cat((positions[half:][:, 1][first_seen_index_1], positions[:half][:, 1][first_seen_index_2]), dim=0)
+
 
                   # Compute the vectors between the source and target points
             u = x_dst - x_src
@@ -253,9 +302,15 @@ for i in range(num_iterations):
 
             # Create the quiver plot
 
-            plt.scatter(positions[:, 0].cpu(), positions[:, 1].cpu(), c = ind.float().cpu().numpy(), cmap ='seismic', s= 50, norm = None)
-                
-            plt.quiver(x_src.cpu(), y_src.cpu(), u.cpu(), v.cpu(), ind.float().cpu().numpy(), angles='xy', scale_units='xy', scale=1, alpha = 0.05, cmap ='seismic')
+            from matplotlib.colors import Normalize
+
+            # Set a fixed range for the colormap
+            color_norm = Normalize(vmin=-1, vmax=1)  # Assuming health values range from -1 to 1
+
+            # Plotting without normalization
+            plt.scatter(positions[:, 0].cpu(), positions[:, 1].cpu(),
+                        c=ind.float().cpu().numpy(), cmap='seismic', s=50, norm=color_norm)       
+            plt.quiver(x_src.cpu(), y_src.cpu(), u.cpu(), v.cpu(), ind.float().cpu().numpy(), angles='xy', scale_units='xy', scale=1, alpha = 0.05, cmap ='seismic', norm=color_norm)
 
 
             '''
@@ -268,13 +323,24 @@ for i in range(num_iterations):
             
             plt.savefig('%i.png' % (i+1000))
 
-        if (i % 1000) == 999:
+        if (torch.sum(healths[:half] > 0) == 0 or torch.sum(healths[half:] > 0) == 0 or i % 1000 == 999):
+
         #if (loss == 0.0):
             # Reset the simulation and update the weights
-            positions = torch.rand(num_soldiers, 2).cuda()
+            rotation_angle = random.uniform(0, 2 * np.pi)
 
-            positions[:half] *= -50
-            positions[half:] *= 50
+            # Generate angles for the circle and apply the rotation
+            angles = torch.linspace(0, 2 * np.pi * (num_soldiers - 1) / num_soldiers, num_soldiers).cuda()
+            angles = (angles + rotation_angle) % (2 * np.pi)
+
+            # Generate positions for the first half of the army (Army 1)
+            positions = torch.zeros(num_soldiers, 2).cuda()
+            positions[:half, 0] = radius * torch.cos(angles[:half])  # x-coordinates
+            positions[:half, 1] = radius * torch.sin(angles[:half])  # y-coordinates
+
+            # Generate positions for the second half of the army (Army 2)
+            positions[half:, 0] = radius * torch.cos(angles[half:])  # x-coordinates
+            positions[half:, 1] = radius * torch.sin(angles[half:])  # y-coordinates
 
             #if random.randint(0, 1): positions *= -1
 
@@ -282,9 +348,11 @@ for i in range(num_iterations):
             directions = torch.zeros(num_soldiers, 2).cuda()
             healths = torch.ones(num_soldiers).cuda().requires_grad_()
             
-            '''
             if army_1_alive < army_2_alive:
+                print("Army 2 wins. Transferring weights to Army 1.")
                 army_1_net.load_state_dict(army_2_net.state_dict())
-            else:
+            elif army_2_alive < army_1_alive:
+                print("Army 1 wins. Transferring weights to Army 2.")
                 army_2_net.load_state_dict(army_1_net.state_dict())
-            '''
+            else:
+                print("It's a tie. No weight transfer.")
