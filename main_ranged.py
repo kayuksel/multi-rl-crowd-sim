@@ -83,17 +83,59 @@ def generate_batch(positions, velocities, healths, k):
 
     return batch_input
 
+
+class AttentionLayer(nn.Module):
+    def __init__(self, input_size, embed_size):
+        super(AttentionLayer, self).__init__()
+        # Adjust the size of the query, key, and value layers to match the input size
+        self.query = nn.Linear(input_size, embed_size)
+        self.key = nn.Linear(input_size, embed_size)
+        self.value = nn.Linear(input_size, embed_size)
+
+    def forward(self, x):
+        query = self.query(x)
+        key = self.key(x)
+        value = self.value(x)
+        
+        # Compute attention scores
+        attention_weights = torch.matmul(query, key.transpose(-2, -1)) / (x.size(-1) ** 0.5)
+        attention_weights = torch.softmax(attention_weights, dim=-1)
+        
+        # Multiply attention weights with values to get the attention output
+        output = torch.matmul(attention_weights, value)
+        return output
+
+
 class ArmyNet(nn.Module):
-    def __init__(self, input_size, output_size, size=128):
+    def __init__(self, input_size, output_size, size=256):
         super(ArmyNet, self).__init__()
         def block(in_feat, out_feat):
             return [nn.Linear(in_feat, out_feat), nn.Mish()]
-        self.model = nn.Sequential(*block(input_size, size), nn.Dropout(0.5),
-             *block(size, size//2), nn.Dropout(0.5), *block(size//2, size//4), nn.Dropout(0.5), *block(size//4, output_size))
+
+        # Initialize the attention layer
+        self.attention = AttentionLayer(input_size, size)
+        
+        # Fully connected layers after attention (need to flatten the attention output)
+        self.model = nn.Sequential(*block(size, size//2), nn.Dropout(0.5),
+                                   *block(size//2, size//4), nn.Dropout(0.5), 
+                                   *block(size//4, size//8), nn.Dropout(0.5), 
+                                   *block(size//8, output_size))
         self.model[-1] = nn.Tanh()
+
+        # Learnable standard deviation for output noise
         self.std = nn.Parameter(torch.zeros(output_size).cuda())
+
     def forward(self, x):
+        # Apply attention
+        x = self.attention(x)
+        
+        # Flatten the output of attention to match fully connected layer input
+        x = x.flatten(start_dim=1)  # Flatten from the second dimension onward
+        
+        # Pass the result through the fully connected layers
         mu = self.model(x)
+        
+        # Add noise (standard deviation learned)
         return mu + (self.std * torch.randn_like(mu))
 
 # Define the prey and predator acceleration networks
@@ -104,6 +146,7 @@ army_2_net = ArmyNet(372, 4).cuda()
 optimizer_1 = torch.optim.Adam(army_1_net.parameters())
 optimizer_2 = torch.optim.Adam(army_2_net.parameters())
 
+'''
 def loss_function(healths):
     # Split healths into two armies
     army_1_healths = healths[:half]
@@ -112,6 +155,8 @@ def loss_function(healths):
     # Save the initial mean health for both armies
     initial_army_1 = army_1_healths.mean()
     initial_army_2 = army_2_healths.mean()
+
+    print(f"[Debug] Initial Mean Healths - Army 1: {initial_army_1:.3f}, Army 2: {initial_army_2:.3f}")
 
     # Compute relative positions
     relative_positions_1 = positions[:half][:, None] - positions[half:]
@@ -128,6 +173,9 @@ def loss_function(healths):
     # Adjust distances based on dot product and visibility
     relative_distance_1 = torch.norm(relative_positions_1, dim=-1) * torch.sigmoid(-dot_product_1)
     relative_distance_2 = torch.norm(relative_positions_2, dim=-1) * torch.sigmoid(-dot_product_2)
+
+    print(f"[Debug] Relative Distances - Army 1: {relative_distance_1.mean().item():.3f}, "
+          f"Army 2: {relative_distance_2.mean().item():.3f}")
 
     # Exclude dead soldiers from being targeted
     relative_distance_1[:, healths[half:] <= 0] = float('inf')  # Army 2 soldiers cannot be targeted
@@ -149,30 +197,61 @@ def loss_function(healths):
     damage_to_army_2 = torch.zeros(half).cuda()
     damage_to_army_1 = torch.zeros(half).cuda()
 
-    # Use scatter_add_ to accumulate damage from attackers
+    # Define maximum damage range
+    max_damage_range = 100.0  # Adjust this value as needed
+
+    # Ensure valid targets are within the range
+    valid_damage_mask_1 = (relative_distance_1 <= max_damage_range) & valid_targets_mask_1
+    valid_damage_mask_2 = (relative_distance_2 <= max_damage_range) & valid_targets_mask_2
+
+    # Compute the damage contributions, applying the valid damage mask
+    damage_contribution_1 = torch.zeros_like(healths[:half])
+    damage_contribution_2 = torch.zeros_like(healths[half:])
+
+    # Accumulate damage contributions only for valid targets
+    damage_contribution_1[first_seen_index_1] = healths[:half] * 0.02 * valid_damage_mask_1[torch.arange(half), first_seen_index_1]
+    damage_contribution_2[first_seen_index_2] = healths[half:] * 0.02 * valid_damage_mask_2[torch.arange(half), first_seen_index_2]
+
+    # Apply the damage to the opposing armies
     damage_to_army_2.scatter_add_(
-        0, 
-        first_seen_index_1[first_seen_index_1 != -1], 
-        healths[:half][first_seen_index_1 != -1] * 0.01
+        0,
+        first_seen_index_1[first_seen_index_1 != -1],
+        damage_contribution_1[first_seen_index_1 != -1]
     )
     damage_to_army_1.scatter_add_(
-        0, 
-        first_seen_index_2[first_seen_index_2 != -1], 
-        healths[half:][first_seen_index_2 != -1] * 0.01
+        0,
+        first_seen_index_2[first_seen_index_2 != -1],
+        damage_contribution_2[first_seen_index_2 != -1]
     )
 
-    # Apply health reduction
-    army_1_healths_new = torch.where(healths[:half] > 0, army_1_healths - damage_to_army_1, army_1_healths)
-    army_2_healths_new = torch.where(healths[half:] > 0, army_2_healths - damage_to_army_2, army_2_healths)
+    print(f"[Debug] Damage Dealt - Army 1 to Army 2: {damage_to_army_2.sum().item():.3f}, "
+          f"Army 2 to Army 1: {damage_to_army_1.sum().item():.3f}")
+
+    # Gain health based on damage inflicted (only for alive soldiers)
+    health_gain_1 = torch.zeros(half).cuda()
+    health_gain_2 = torch.zeros(half).cuda()
+
+    alive_mask_1 = healths[:half] > 0  # Mask for alive soldiers in Army 1
+    alive_mask_2 = healths[half:] > 0  # Mask for alive soldiers in Army 2
+
+    health_gain_1[alive_mask_1] = 0.5 * damage_contribution_1[alive_mask_1]
+    health_gain_2[alive_mask_2] = 0.5 * damage_contribution_2[alive_mask_2]
+
+    print(f"[Debug] Health Gains - Army 1: {health_gain_1.sum().item():.3f}, Army 2: {health_gain_2.sum().item():.3f}")
+
+    # Apply health updates
+    army_1_healths_new = torch.where(healths[:half] > 0, 
+                                     army_1_healths - damage_to_army_1 + health_gain_1, 
+                                     army_1_healths)
+    army_2_healths_new = torch.where(healths[half:] > 0, 
+                                     army_2_healths - damage_to_army_2 + health_gain_2, 
+                                     army_2_healths)
 
     # Clamp health values between 0 and 1
     army_1_healths_new = army_1_healths_new.clamp(0, 1)
     army_2_healths_new = army_2_healths_new.clamp(0, 1)
 
-    # Debugging: Check health updates
-    print(f"Army 1 Healths: Initial Mean = {initial_army_1:.3f}, Updated Mean = {army_1_healths_new.mean():.3f}")
-    print(f"Army 2 Healths: Initial Mean = {initial_army_2:.3f}, Updated Mean = {army_2_healths_new.mean():.3f}")
-    print(f"Damage to Army 1: {damage_to_army_1.sum().item()}, Damage to Army 2: {damage_to_army_2.sum().item()}")
+    print(f"[Debug] Updated Mean Healths - Army 1: {army_1_healths_new.mean():.3f}, Army 2: {army_2_healths_new.mean():.3f}")
 
     # Compute the changes in health
     delta_army_1 = army_1_healths_new.mean() - initial_army_1
@@ -181,11 +260,124 @@ def loss_function(healths):
     # Compute the difference and sum of health changes
     delta_diff = delta_army_1 - delta_army_2
     delta_sum = delta_army_1 + delta_army_2
+    loss = delta_diff * delta_sum
 
     # Concatenate updated healths
     updated_healths = torch.cat([army_1_healths_new, army_2_healths_new])
 
-    return delta_diff * delta_sum, updated_healths, first_seen_index_1, first_seen_index_2
+    return loss, updated_healths, first_seen_index_1, first_seen_index_2
+'''
+def loss_function(healths):
+    # Split healths into two armies
+    army_1_healths = healths[:half]
+    army_2_healths = healths[half:]
+
+    # Save the initial mean health for both armies
+    initial_army_1 = army_1_healths.mean()
+    initial_army_2 = army_2_healths.mean()
+
+    print(f"Initial Mean Healths - Army 1: {initial_army_1:.3f}, Army 2: {initial_army_2:.3f}")
+
+    # Compute relative positions
+    relative_positions_1 = positions[:half][:, None] - positions[half:]
+    relative_positions_2 = positions[half:][:, None] - positions[:half]
+
+    # Compute normalized direction vectors
+    direction_vectors_1 = relative_positions_1 / (torch.norm(relative_positions_1, dim=-1, keepdim=True) + 1e-6)
+    direction_vectors_2 = relative_positions_2 / (torch.norm(relative_positions_2, dim=-1, keepdim=True) + 1e-6)
+
+    # Compute dot products for visibility (between direction vectors and relative positions)
+    dot_product_1 = torch.sum(direction_vectors_1 * directions[half:][:, None], dim=-1)
+    dot_product_2 = torch.sum(direction_vectors_2 * directions[:half][:, None], dim=-1)
+
+    # Adjust distances based on dot product and visibility (using sigmoid)
+    relative_distance_1 = torch.norm(relative_positions_1, dim=-1) * torch.sigmoid(-dot_product_1)
+    relative_distance_2 = torch.norm(relative_positions_2, dim=-1) * torch.sigmoid(-dot_product_2)
+
+    # Max attack range
+    max_distance = 10.0  # Example max range for attacks
+    smoothing_factor = max_distance / (torch.mean(relative_distance_1+relative_distance_2) / 4)
+
+    # Apply a soft mask to limit interactions beyond the max_distance using sigmoid
+    attack_mask_1 = torch.sigmoid((max_distance - relative_distance_1) / smoothing_factor)  # Smoothing factor (10.0)
+    attack_mask_2 = torch.sigmoid((max_distance - relative_distance_2) / smoothing_factor)
+
+    # Exclude dead soldiers from being targeted
+    relative_distance_1[:, healths[half:] <= 0] = float('inf')  # Army 2 soldiers cannot be targeted
+    relative_distance_2[:, healths[:half] <= 0] = float('inf')  # Army 1 soldiers cannot be targeted
+
+    print(f"Relative Distance - Army 1 Mean: {relative_distance_1.mean().item():.3f}, Army 2 Mean: {relative_distance_2.mean().item():.3f}")
+
+    # Find the closest visible opponent for each soldier (non-differentiable)
+    _, first_seen_index_1 = torch.min(relative_distance_1, dim=1)  # Soldiers in Army 1 targeting Army 2
+    _, first_seen_index_2 = torch.min(relative_distance_2, dim=1)  # Soldiers in Army 2 targeting Army 1
+
+    # Softmax damage calculations for differentiability
+    soft_weights_1 = torch.softmax(-relative_distance_1, dim=1)
+    soft_weights_2 = torch.softmax(-relative_distance_2, dim=1)
+
+    # Compute weighted damage contributions while ensuring only alive soldiers contribute
+    weighted_damage_1 = torch.sum(soft_weights_1 * (healths[half:] > 0).float() * attack_mask_1, dim=1) * 0.02
+    weighted_damage_2 = torch.sum(soft_weights_2 * (healths[:half] > 0).float() * attack_mask_2, dim=1) * 0.02
+
+    print(f"Damage Contributions - Army 1 to Army 2: {weighted_damage_1.sum().item():.3f}, "
+          f"Army 2 to Army 1: {weighted_damage_2.sum().item():.3f}")
+
+    # Compute health gains based on damage inflicted (ensure dead soldiers don't get health)
+    health_gain_1 = 0.25 * weighted_damage_1
+    health_gain_2 = 0.25 * weighted_damage_2
+
+    # Mask health gains and updates for dead soldiers
+    alive_mask_1 = (healths[:half] > 0).float()  # 1 for alive, 0 for dead
+    alive_mask_2 = (healths[half:] > 0).float()  # 1 for alive, 0 for dead
+
+    print(f"Alive Counts - Army 1: {torch.sum(alive_mask_1).item()}, Army 2: {torch.sum(alive_mask_2).item()}")
+
+    # Apply damage and health gains only to living soldiers
+    updated_health_1 = alive_mask_1 * (healths[:half] - weighted_damage_2 + health_gain_1)
+    updated_health_2 = alive_mask_2 * (healths[half:] - weighted_damage_1 + health_gain_2)
+
+    # Set health of dead soldiers to zero explicitly (avoid invalid health updates)
+    updated_health_1 = updated_health_1 * alive_mask_1
+    updated_health_2 = updated_health_2 * alive_mask_2
+
+    # Clamp health values to ensure they stay within [0, 1]
+    updated_health_1 = updated_health_1.clamp(0, 1)
+    updated_health_2 = updated_health_2.clamp(0, 1)
+
+    print(f"Updated Healths - Army 1 Mean: {updated_health_1.mean().item():.3f}, "
+          f"Army 2 Mean: {updated_health_2.mean().item():.3f}")
+
+    # Compute the loss based on health changes
+    delta_army_1 = updated_health_1.mean() - initial_army_1
+    delta_army_2 = updated_health_2.mean() - initial_army_2
+
+    loss = (delta_army_1 - delta_army_2) * (delta_army_1 + delta_army_2)
+
+    print(f"Loss: {loss.item():.3f}")
+
+    # Concatenate updated healths for returning the result
+    updated_healths = torch.cat([updated_health_1, updated_health_2])
+
+
+    threshold = 1e-4
+    no_attack_mask_1 = torch.all(soft_weights_1 < threshold, dim=1)  # Soldiers in Army 1 not attacking
+    no_attack_mask_2 = torch.all(soft_weights_2 < threshold, dim=1)  # Soldiers in Army 2 not attacking
+
+    # Set `first_seen_index` to -1 for soldiers not attacking
+    first_seen_index_1[no_attack_mask_1] = -1
+    first_seen_index_2[no_attack_mask_2] = -1
+
+    # Return the loss, updated healths, and the non-differentiable indices
+    return loss, updated_healths, first_seen_index_1, first_seen_index_2
+
+
+
+
+
+
+
+
 
 for i in range(num_iterations):
     # Generate batch
@@ -243,9 +435,33 @@ for i in range(num_iterations):
     # Update velocities
     velocities += accelerations[:,:2] / torch.norm(accelerations[:,:2], dim=1, keepdim=True)
     # Limit the velocities to the maximum velocities
-    velocities = healths[:, None] * velocities / torch.norm(velocities, dim=1, keepdim=True)
+    velocities = velocities / torch.norm(velocities, dim=1, keepdim=True)
+
+
     # Update positions
-    positions += velocities
+    #positions += healths[:, None] * velocities
+
+
+    # Compute proposed positions
+    proposed_positions = positions + healths[:, None] * velocities
+
+    # Compute pairwise distances for nearest neighbor detection
+    displacement = positions[:, None] - positions  # Shape: (num_soldiers, num_soldiers, 2)
+    distances = torch.norm(displacement, dim=2)  # Shape: (num_soldiers, num_soldiers)
+
+    # Mask self-distances
+    distances += torch.eye(num_soldiers, device=positions.device) * float('inf')  # Ignore self-distances
+
+    # Find the nearest neighbor for each soldier
+    nearest_distances, nearest_indices = torch.min(distances, dim=1)
+
+    # Identify collisions (distance to nearest neighbor is below the threshold)
+    min_distance = 25.0  # Set your minimum allowed distance
+    colliding_mask = nearest_distances < min_distance
+
+    # Prevent updates for colliding soldiers
+    non_colliding_mask = ~colliding_mask
+    positions[non_colliding_mask] = proposed_positions[non_colliding_mask]
 
     #positions = positions.clamp(-500, 500)
 
@@ -295,10 +511,16 @@ for i in range(num_iterations):
             y_dst = torch.cat((positions[half:][:, 1][first_seen_index_1], positions[:half][:, 1][first_seen_index_2]), dim=0)
 
 
-                  # Compute the vectors between the source and target points
+            # Create validity masks for both armies
+            valid_mask_1 = first_seen_index_1 >= 0
+            valid_mask_2 = first_seen_index_2 >= 0
+
+            # Combine validity masks for both armies
+            valid_mask = torch.cat([valid_mask_1, valid_mask_2]).cpu()
+
+            # Compute the vectors between the source and target points
             u = x_dst - x_src
             v = y_dst - y_src 
-
 
             # Create the quiver plot
 
@@ -307,11 +529,21 @@ for i in range(num_iterations):
             # Set a fixed range for the colormap
             color_norm = Normalize(vmin=-1, vmax=1)  # Assuming health values range from -1 to 1
 
-            # Plotting without normalization
-            plt.scatter(positions[:, 0].cpu(), positions[:, 1].cpu(),
-                        c=ind.float().cpu().numpy(), cmap='seismic', s=50, norm=color_norm)       
-            plt.quiver(x_src.cpu(), y_src.cpu(), u.cpu(), v.cpu(), ind.float().cpu().numpy(), angles='xy', scale_units='xy', scale=1, alpha = 0.05, cmap ='seismic', norm=color_norm)
+            # Split indices for the two armies
+            army_1_indices = torch.arange(half)
+            army_2_indices = torch.arange(half, num_soldiers)
 
+            # Plot Army 1 (e.g., circles)
+            plt.scatter(positions[army_1_indices, 0].cpu(), positions[army_1_indices, 1].cpu(),
+                        c=ind[army_1_indices].float().cpu().numpy(), cmap='seismic', s=50, norm=color_norm, marker='o', label='Army 1')
+
+            # Plot Army 2 (e.g., triangles)
+            plt.scatter(positions[army_2_indices, 0].cpu(), positions[army_2_indices, 1].cpu(),
+                        c=ind[army_2_indices].float().cpu().numpy(), cmap='seismic', s=50, norm=color_norm, marker='^', label='Army 2')
+
+            # Plot directional vectors (quiver)
+            plt.quiver(x_src[valid_mask].cpu(), y_src[valid_mask].cpu(), u[valid_mask].cpu(), v[valid_mask].cpu(), ind[valid_mask].float().cpu().numpy(),
+                       angles='xy', scale_units='xy', scale=1, alpha=0.05, cmap='seismic', norm=color_norm)
 
             '''
             diff = positions - directions
@@ -323,7 +555,7 @@ for i in range(num_iterations):
             
             plt.savefig('%i.png' % (i+1000))
 
-        if (torch.sum(healths[:half] > 0) == 0 or torch.sum(healths[half:] > 0) == 0 or i % 1000 == 999):
+        if (torch.sum(healths[:half] > 0) <= 1 or torch.sum(healths[half:] > 0) <= 1 or i % 1000 == 999):
 
         #if (loss == 0.0):
             # Reset the simulation and update the weights
@@ -347,6 +579,7 @@ for i in range(num_iterations):
             velocities = torch.zeros(num_soldiers, 2).cuda()
             directions = torch.zeros(num_soldiers, 2).cuda()
             healths = torch.ones(num_soldiers).cuda().requires_grad_()
+
             
             if army_1_alive < army_2_alive:
                 print("Army 2 wins. Transferring weights to Army 1.")
@@ -356,3 +589,4 @@ for i in range(num_iterations):
                 army_2_net.load_state_dict(army_1_net.state_dict())
             else:
                 print("It's a tie. No weight transfer.")
+            
