@@ -463,7 +463,7 @@ for i in range(num_iterations):
 
         print('army_1_alive %f army_2_alive %f' % (army_1_alive, army_2_alive))
 
-        if (i % 2) == 0:
+        if (i % 5) == 0:
             # Plot the simulation
             plt.clf()
             plt.title("alive_1 %.0f%% alive_2 %.0f%% health_1 %.0f%%, health_2 %.0f%%" % (army_1_alive*100, army_2_alive*100, healths[:half].mean()*100, healths[half:].mean()*100))
