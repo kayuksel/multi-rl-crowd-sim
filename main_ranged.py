@@ -4,7 +4,7 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 import numpy as np
 
-num_soldiers = 100
+num_soldiers = 200
 half = num_soldiers // 2
 radius = 50.0
 
@@ -25,6 +25,8 @@ positions[:half, 1] = radius * torch.sin(angles[:half])  # y-coordinates
 # Generate positions for the second half of the army (Army 2)
 positions[half:, 0] = radius * torch.cos(angles[half:])  # x-coordinates
 positions[half:, 1] = radius * torch.sin(angles[half:])  # y-coordinates
+
+positions = torch.rand(num_soldiers, 2).cuda() * 100.0
 
 velocities = torch.zeros(num_soldiers, 2).cuda()
 directions = torch.zeros(num_soldiers, 2).cuda()
@@ -497,7 +499,7 @@ for i in range(num_iterations):
 
             # Plot Army 2 (e.g., triangles)
             plt.scatter(positions[army_2_indices, 0].cpu(), positions[army_2_indices, 1].cpu(),
-                        c=ind[army_2_indices].float().cpu().numpy(), cmap='seismic', s=50, norm=color_norm, marker='^', label='Army 2')
+                        c=ind[army_2_indices].float().cpu().numpy(), cmap='seismic', s=50, norm=color_norm, marker='o', label='Army 2')
 
             # Plot directional vectors (quiver)
             plt.quiver(x_src[valid_mask].cpu(), y_src[valid_mask].cpu(), u[valid_mask].cpu(), v[valid_mask].cpu(), ind[valid_mask].float().cpu().numpy(),
@@ -511,7 +513,7 @@ for i in range(num_iterations):
 
             
             
-            plt.savefig('%i.png' % (i+1000))
+            plt.savefig('%i.png' % (i+100000))
 
         if (torch.sum(healths[:half] > 0) <= 1 or torch.sum(healths[half:] > 0) <= 1 or i % 1000 == 999):
 
@@ -532,13 +534,15 @@ for i in range(num_iterations):
             positions[half:, 0] = radius * torch.cos(angles[half:])  # x-coordinates
             positions[half:, 1] = radius * torch.sin(angles[half:])  # y-coordinates
 
+            positions = torch.rand(num_soldiers, 2).cuda() * 100.0
+
             #if random.randint(0, 1): positions *= -1
 
             velocities = torch.zeros(num_soldiers, 2).cuda()
             directions = torch.zeros(num_soldiers, 2).cuda()
             healths = torch.ones(num_soldiers).cuda().requires_grad_()
 
-            '''
+            
             if army_1_alive < army_2_alive:
                 print("Army 2 wins. Transferring weights to Army 1.")
                 army_1_net.load_state_dict(army_2_net.state_dict())
@@ -547,5 +551,5 @@ for i in range(num_iterations):
                 army_2_net.load_state_dict(army_1_net.state_dict())
             else:
                 print("It's a tie. No weight transfer.")
-            '''
+            
             
