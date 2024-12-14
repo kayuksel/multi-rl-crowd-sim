@@ -26,7 +26,7 @@ positions[:half, 1] = radius * torch.sin(angles[:half])  # y-coordinates
 positions[half:, 0] = radius * torch.cos(angles[half:])  # x-coordinates
 positions[half:, 1] = radius * torch.sin(angles[half:])  # y-coordinates
 
-positions = torch.rand(num_soldiers, 2).cuda() * 100.0
+#positions = torch.rand(num_soldiers, 2).cuda() * 100.0
 
 velocities = torch.zeros(num_soldiers, 2).cuda()
 directions = torch.zeros(num_soldiers, 2).cuda()
@@ -141,8 +141,8 @@ class ArmyNet(nn.Module):
         return mu + (self.std * torch.randn_like(mu))
 
 # Define the prey and predator acceleration networks
-army_1_net = ArmyNet(372, 4).cuda()
-army_2_net = ArmyNet(372, 4).cuda()
+army_1_net = ArmyNet(373, 4).cuda()
+army_2_net = ArmyNet(373, 4).cuda()
 
 # Define the optimizers
 optimizer_1 = torch.optim.Adam(army_1_net.parameters())
@@ -339,9 +339,15 @@ def loss_function(healths):
     # Return the loss, updated healths, and the non-differentiable indices
     return loss, updated_healths, first_seen_index_1, first_seen_index_2
 
+previous_healths = torch.ones(num_soldiers).cuda()
+
 for i in range(num_iterations):
     # Generate batch
     batch_input = generate_batch(positions, velocities, healths, k)
+
+    health_change = healths - previous_healths
+    batch_input = torch.cat([batch_input, health_change.view(num_soldiers, 1)], dim=1)
+    previous_healths = healths.clone()
 
     # Compute the mean health of each army
     mean_health_army1 = torch.mean(healths[:half])
@@ -457,7 +463,7 @@ for i in range(num_iterations):
 
         print('army_1_alive %f army_2_alive %f' % (army_1_alive, army_2_alive))
 
-        if (i % 5) == 0:
+        if (i % 2) == 0:
             # Plot the simulation
             plt.clf()
             plt.title("alive_1 %.0f%% alive_2 %.0f%% health_1 %.0f%%, health_2 %.0f%%" % (army_1_alive*100, army_2_alive*100, healths[:half].mean()*100, healths[half:].mean()*100))
@@ -534,7 +540,7 @@ for i in range(num_iterations):
             positions[half:, 0] = radius * torch.cos(angles[half:])  # x-coordinates
             positions[half:, 1] = radius * torch.sin(angles[half:])  # y-coordinates
 
-            positions = torch.rand(num_soldiers, 2).cuda() * 100.0
+            #positions = torch.rand(num_soldiers, 2).cuda() * 100.0
 
             #if random.randint(0, 1): positions *= -1
 
